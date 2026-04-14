@@ -1,0 +1,38 @@
+@host = http://localhost:5111
+
+### Create team member (do this before assigning tasks)
+POST {{host}}/api/team-members
+Content-Type: application/json
+
+{
+  "name": "Taylor Kim",
+  "email": "taylor@example.com"
+}
+
+### List team members
+GET {{host}}/api/team-members
+
+### List work items
+GET {{host}}/api/work-items
+
+### Search title + filter status
+GET {{host}}/api/work-items?q=draft&status=InProgress
+
+### Get by id
+GET {{host}}/api/work-items/22222222-2222-2222-2222-222222222201
+
+### Create
+POST {{host}}/api/work-items
+Content-Type: application/json
+
+{
+  "title": "Smoke test task",
+  "description": null,
+  "status": null,
+  "priority": null,
+  "assigneeId": "11111111-1111-1111-1111-111111111101",
+  "assignerId": "11111111-1111-1111-1111-111111111102"
+}
+
+### Delete (replace id after create)
+DELETE {{host}}/api/work-items/00000000-0000-0000-0000-000000000000
