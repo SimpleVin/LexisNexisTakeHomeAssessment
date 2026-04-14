@@ -1,30 +1,59 @@
 # Task Management API
 
-ASP.NET Core 8 Web API for team task tracking. Uses **EF Core In-Memory** (no external database), **Clean Architecture** (Domain, Application, Infrastructure, Api), and **CQRS** via **MediatR** with **FluentValidation**.
+ASP.NET Core 8 Web API for team task tracking. Built with EF Core InMemory, MediatR, and FluentValidation.
+
+This solution covers the take-home assessment requirements for:
+- viewing and searching tasks
+- filtering by status, assignee, and priority
+- creating, updating, and deleting tasks
+- assigning tasks to team members
+- setting and updating task priorities
+
+This repository also includes:
+- full source code
+- `README.md` with local run instructions
+- `solution.md` describing design decisions and trade-offs
+
+## Quick start
+
+### Prerequisites
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+
+### Run locally
+
+```bash
+dotnet restore
+dotnet run --project src/TaskManagement.Api/TaskManagement.Api.csproj
+
+
+## Authetication
+
+POST http://localhost:5111/api/dev/token
+Content-Type: application/json
+
+{
+  "role": "User",
+  "teamMemberId": "11111111-1111-1111-1111-111111111104"
+}
 
 ## Take-home assessment checklist
 
-Minimum requirements from the brief are mapped as follows:
-
-| Requirement | Implementation |
-|-------------|----------------|
-| View and search tasks | `GET /api/work-items`; search via `q` (title substring, case-insensitive) |
-| Filter tasks (status, assignee, priority) | Same route: `status`, `assigneeId`, `priority`; optional `createdFrom` / `createdTo` (AND) |
-| Create / update / delete tasks | `POST`, `PUT`, `DELETE /api/work-items` |
-| Assign tasks to team members | `assigneeId` on create/update (must exist in `/api/team-members`) |
-| Set and update task priorities | `priority` on create/update |
-| EF Core InMemory | `UseInMemoryDatabase`; no external DB |
-| Seed example data on startup | `SeedData` (team members + work items) applied when the database is created |
-
-**Deliverables:** this repo includes **source**, **[README.md](README.md)** (run instructions), and **[solution.md](solution.md)** (design and trade-offs). Optional video walkthrough can replace or supplement `solution.md` per the employer instructions.
-
-Extras beyond the minimum (team members CRUD, soft delete, append-only audit, assigner derived from the authenticated user on create, dev audit viewer) are described in [solution.md](solution.md).
+Requirement	Implementation
+View and search tasks	GET /api/work-items; search via q (title substring, case-insensitive)
+Filter tasks	GET /api/work-items with status, assigneeId, priority, optional createdFrom and createdTo
+Create new tasks	POST /api/work-items
+Update existing tasks	PUT /api/work-items/{id}
+Delete tasks	DELETE /api/work-items/{id}
+Assign tasks to team members	assigneeId on create/update; validated against /api/team-members
+Set and update task priorities	priority on create/update
+EF Core InMemory	UseInMemoryDatabase; no external database
+Seed example records on startup	SeedData creates team members and work items when the database is created
 
 ## Tests
 
-```bash
 dotnet test TaskManagement.sln
-```
+
 
 Integration tests (`tests/TaskManagement.Api.Tests`) exercise the **assessment** behaviors: list + seed, search `q`, filters (`status`, `assigneeId`, `priority`), and create/update/delete with assignee + priority. They run **sequentially** against an in-memory host (parallelism disabled for shared state).
 
@@ -102,11 +131,11 @@ Without **jq**, paste the token from the JSON response of `POST /api/dev/token` 
 
 ### Seeded work items
 
-| Id | Title | Assignee id | Assigner id | Status | Priority |
+| Id                                      | Title                   | Assignee id       | Assigner id         | Status      | Priority |
 |----|-------|-------------|-------------|--------|----------|
-| `22222222-2222-2222-2222-222222222201` | Draft API specification | `…101` (Alex) | `…102` (Jordan) | InProgress | High |
-| `22222222-2222-2222-2222-222222222202` | Seed database | `…102` (Jordan) | — | Todo | Medium |
-| `22222222-2222-2222-2222-222222222203` | Write README | — | — | (unset) | Low |
+| `22222222-2222-2222-2222-222222222201` | Draft API specification  | `…101` (Alex)     | `…102` (Jordan)     | InProgress  | High |
+| `22222222-2222-2222-2222-222222222202` | Seed database            | `…102` (Jordan)   | `…101` (Alex)       | Todo        | Medium |
+| `22222222-2222-2222-2222-222222222203` | Write README             | —                 | `…102` (Jordan)     | New         | Low |
 
 ### Try these queries (with a valid Bearer token)
 
@@ -119,29 +148,29 @@ Without **jq**, paste the token from the JSON response of `POST /api/dev/token` 
 
 ## API overview
 
-Create **team members** first (or use seed ids above), then reference their `id` as **`assigneeId`** on work items. **Assigner** on create is always the authenticated team member (`assignerId` is not sent in the body). **PUT** keeps the existing **assigner** unchanged. Mutations record **`createdById` / `updatedById` / `deletedById`** from the JWT when present.
+Create team members first, or use the seeded IDs above, then reference their id as assigneeId on work items.
+
+The assigner is derived from the authenticated user on create and is not sent in the request body. On update, the existing assigner remains unchanged.
+
+Create, update, and delete operations record createdById, updatedById, and deletedById from the JWT identity when available.
 
 ### Team members — `/api/team-members`
 
-| Method | Route | Description |
-|--------|--------|-------------|
-| GET | `/api/team-members` | List members. Optional `q`: name substring (case-insensitive). |
-| GET | `/api/team-members/{id}` | Get one member; **404** if missing or **soft-deleted**. |
-| POST | `/api/team-members` | Create. **201** + `Location`. Body: `name` and `email` (required; valid email format). |
-| PUT | `/api/team-members/{id}` | Full replace `name` and `email` (both required). **404** if missing. |
-| DELETE | `/api/team-members/{id}` | **Soft delete** (**Admin** only). **200** + JSON envelope (`success`, optional `message`, `errors`). **403** + **Problem Details** if authenticated as **User**. **404** if already deleted or unknown id. Work items that referenced this member as **assignee** or **assigner** get those FKs cleared. |
-
-Responses use an **`ApplicationResult`** envelope for most operations (`success`, `data`, `errors`) or **`ApplicationUnitResult`** for deletes (`success`, `message`, `errors`). Audit-style fields on DTOs include `createdAt`, `updatedAt`, `createdById`, `updatedById`, `deletedAt`, `deletedById` (populated from the authenticated team member where applicable).
+Method	Route	Description
+GET	/api/team-members	List members. Optional q searches name (case-insensitive substring).
+GET	/api/team-members/{id}	Get one member. Returns 404 if not found or soft-deleted.
+POST	/api/team-members	Create a member. Returns 201 with Location. Requires name and email.
+PUT	/api/team-members/{id}	Replace name and email. Returns 404 if missing.
+DELETE	/api/team-members/{id}	Soft delete. Admin only. Returns 404 if missing or already deleted.
 
 ### Work items — `/api/work-items`
 
-| Method | Route | Description |
-|--------|--------|-------------|
-| GET | `/api/work-items` | List tasks. Query: `q` (title substring, case-insensitive), `status`, `priority`, `assigneeId`, `createdFrom`, `createdTo` (ISO 8601, UTC). Filters combine with **AND**. |
-| GET | `/api/work-items/{id}` | Get one task; **404** if missing. |
-| POST | `/api/work-items` | Create. **201** + `Location`. Body: `title` (required), `description`, `status` (optional; defaults to **New**), `priority` (optional; defaults to **Low**), optional `assigneeId`. **Assigner** is always the authenticated user. **400** if `assigneeId` is not a real member. |
-| PUT | `/api/work-items/{id}` | Full replace of body fields; **assigner** on the row is unchanged. **404** if missing. |
-| DELETE | `/api/work-items/{id}` | **Soft delete** (**Admin** only). **200** + JSON envelope (`success`, optional `message`, `errors`). **403** + **Problem Details** if authenticated as **User**. **404** if missing or already deleted. |
+Method	Route	Description
+GET	/api/team-members	List members. Optional q searches name (case-insensitive substring).
+GET	/api/team-members/{id}	Get one member. Returns 404 if not found or soft-deleted.
+POST	/api/team-members	Create a member. Returns 201 with Location. Requires name and email.
+PUT	/api/team-members/{id}	Replace name and email. Returns 404 if missing.
+DELETE	/api/team-members/{id}	Soft delete. Admin only. Returns 404 if missing or already deleted.
 
 **Append-only audit log:** each create/update/soft-delete for `TeamMember` and `WorkItem` writes a row to `AuditLogEntries` with a JSON **payload** snapshot and **`actorId`** when a JWT identity is present. In **Development** only, `GET /api/dev/audit-log-entries` returns audit rows (newest first); seed data alone may not produce audit rows until you mutate entities through the API.
 
@@ -151,7 +180,6 @@ Expected failures from handlers return the **application envelope** with an HTTP
 
 Mint a token first (see [Seed data and test IDs](#seed-data-and-test-ids)), then add the header **`Authorization: Bearer <accessToken>`** to the examples below.
 
-```http
 POST http://localhost:5111/api/team-members
 Authorization: Bearer <accessToken>
 Content-Type: application/json
@@ -160,14 +188,10 @@ Content-Type: application/json
   "name": "Taylor Kim",
   "email": "taylor@example.com"
 }
-```
 
-```http
 GET http://localhost:5111/api/work-items?q=draft&status=InProgress
 Authorization: Bearer <accessToken>
-```
 
-```http
 POST http://localhost:5111/api/work-items
 Authorization: Bearer <accessToken>
 Content-Type: application/json
@@ -178,7 +202,6 @@ Content-Type: application/json
   "priority": "Medium",
   "assigneeId": "11111111-1111-1111-1111-111111111101"
 }
-```
 
 ## Solution layout
 

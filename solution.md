@@ -1,92 +1,218 @@
+solution.md
+
+```md
 # Design and trade-offs
 
-## Deliverables (per employer brief)
+## Deliverables
 
 | Deliverable | Location |
 |-------------|----------|
-| All source code | `src/` (Domain, Application, Infrastructure, Api) and `tests/` |
+| All source code | `src/` and `tests/` |
 | Instructions to run locally | [README.md](README.md) |
-| Design and trade-offs | This document (`solution.md`). A short video walkthrough may be submitted **instead of or in addition to** this file if the employer allows. |
+| Design and trade-offs | This document (`solution.md`) |
 
-## Assessment requirements (core scope)
+Per the brief, a short video walkthrough may be submitted instead of, or in addition to, this document.
 
-The take-home asked for a **task management API** with EF Core **InMemory**, **seed data**, and:
+## Scope covered
 
-| Requirement | Where it lives |
-|---------------|----------------|
-| View and search tasks | `GET /api/work-items`, `q` searches **title** (case-insensitive) |
-| Filter by status, assignee, priority | Same endpoint: `status`, `assigneeId`, `priority` (+ optional `createdFrom` / `createdTo`) |
-| Create / update / delete tasks | `POST`, `PUT`, `DELETE` under `/api/work-items` |
-| Assign tasks to team members | `assigneeId` on create/update (validated against team members) |
-| Set and update priority | `priority` on create/update |
-| Technical: InMemory + seed | `UseInMemoryDatabase`, `SeedData` + `EnsureCreated` |
+The take-home asked for a task management API using EF Core InMemory with seeded data and support for:
 
-Everything below **Architecture** includes **additional** design (Clean Architecture, CQRS, team-member CRUD, soft delete, audit log, assigner tied to the authenticated user on create) that goes **beyond** the minimum brief. The **minimum** is satisfied by the **work items** API and persistence above; extras are documented for transparency, not as required deliverables.
+- viewing and searching tasks
+- filtering by status, assignee, and priority
+- creating, updating, and deleting tasks
+- assigning tasks to team members
+- setting and updating task priorities
+
+These requirements are satisfied through the `WorkItems` API and the in-memory persistence setup.
+
+## Notes on approach
+
+This assessment could have been implemented successfully as a single Web API project with direct EF Core usage. I chose a slightly more structured approach to demonstrate separation of concerns, validation, and testability while keeping the core scope focused on the brief.
+
+A few additional features were included beyond the minimum requirements, such as team member CRUD, soft delete, and audit logging. These are not required by the brief, but were added to show design thinking and to make the API feel more complete.
 
 ## Architecture
 
-The solution follows **Clean Architecture** with four projects and a strict dependency direction:
+The solution uses a pragmatic Clean Architecture split across four projects:
 
-- **Domain** — EF-oriented entities (`WorkItem`, `TeamMember`) and enums. No application or framework references.
-- **Application** — `UseCases/` (MediatR commands/queries and handlers), `Common/Contracts` (DTOs and HTTP request bodies), `Common/Models/Interface/<area>/` (e.g. `ITeamMemberRepository`), **FluentValidation**, and area folders for application-only types (e.g. work-item enums, list criteria). It does **not** reference Domain so contracts stay free of persistence entity types; enums are duplicated with matching numeric values and mapped in Infrastructure.
-- **Infrastructure** — EF Core **InMemory** `DbContext`, repositories under **`Persistence/Repositories/{TeamMember|WorkItem}`**, **entity ↔ DTO** mappers under **`Persistence/Mapping/{TeamMember|WorkItem}`**, **seed data** (`HasData`), and **audit** interceptor.
-- **Api** — thin **controllers** (`IMediator`), JSON **enum strings**, **Swagger**, and **exception middleware** mapping domain/application errors to HTTP status codes.
+- `TaskManagement.Domain` — entities and enums
+- `TaskManagement.Application` — use cases, DTOs, validators, and repository interfaces
+- `TaskManagement.Infrastructure` — EF Core InMemory, repositories, mapping, seed data, and audit support
+- `TaskManagement.Api` — controllers, authentication, Swagger, and exception handling
 
-This satisfies **SOLID** in a pragmatic way for a small service: single-purpose handlers, persistence behind interfaces (**D**), and small, focused validators.
+Dependency direction is kept one-way so the API and use cases do not depend directly on persistence details.
+
+This structure adds a bit more ceremony than a single-project solution, but it improves:
+- separation of concerns
+- testability
+- clarity of read vs write behavior
+- flexibility if the persistence layer changes later
+
+For a small exercise, this is more structure than strictly necessary, but still reasonable for demonstrating engineering practices expected at lead level.
 
 ## CQRS
 
-**MediatR** separates reads and writes into explicit request types. For this scope, the extra files are justified by clarity and testability. If the project shrinks later, handlers could be folded behind application services without changing HTTP routes.
+MediatR is used to separate reads and writes into explicit queries and commands.
 
-## Team members API
+For this assignment, CQRS helps keep handlers small and focused:
+- queries handle retrieval and filtering
+- commands handle create, update, and delete flows
 
-Team members are a separate aggregate with their own **CQRS** handlers and **`ITeamMemberRepository`**. Work-item create/update validates `assigneeId` through **`ITeamMemberRepository.Exists`**, not the work-item repository, so persistence concerns stay separated.
+The trade-off is more files and indirection. For a much smaller codebase, a simpler application service approach could also have been valid.
 
-## Soft delete and audit trail
+## Data model and API design
 
-- **TeamMember** and **WorkItem** use **`DeletedAt` / `DeletedById`** (nullable) plus **`CreatedAt` / `UpdatedAt` / `CreatedById` / `UpdatedById`** on the row. EF **global query filters** hide soft-deleted rows from normal queries. Deletes are **soft** only (no `Remove()` on these entities in repositories).
-- **Append-only** table **`AuditLogEntry`** records **Created**, **Updated**, or **Deleted** (including soft delete) with **`PayloadJson`** (simple JSON snapshot). **`AuditSaveChangesInterceptor`** runs on `SaveChanges` and sets **`ActorId`** from the authenticated team member when an HTTP request is in scope (otherwise null). In **Development**, **`GET /api/dev/audit-log-entries`** lists rows for local inspection (not part of the core assessment API).
+The core business entity is a work item. A work item supports:
+- title
+- description
+- status
+- priority
+- assignee
+- assigner
+- audit fields
 
-Stable **seed ids**, **JWT / dev token** usage, and copy-paste examples live in [README.md](README.md) under **Seed data and test IDs**.
+Team members are managed separately and can be referenced by `assigneeId` on work items.
 
-- **`AssignerId`** on work items is set on **create** to the **authenticated** team member (not supplied in the request body). **Updates** do not change **assigner**; only **assignee** and other fields are replaced. Deleting a **member** clears **`AssigneeId`** and/or **`AssignerId`** on work items that referenced that member.
+Key API decisions:
+- `GET /api/work-items` supports searching by `q` and filtering by `status`, `priority`, `assigneeId`, `createdFrom`, and `createdTo`
+- filters combine with `AND`
+- `q` searches title only using case-insensitive substring matching
+- `POST` defaults status to `New` and priority to `Low` when omitted
+- `PUT` performs a full replace of the editable work-item fields
+- unknown `assigneeId` returns `400 Bad Request` because the request is invalid, rather than `404 Not Found` for the work item itself
 
-## REST and validation
+## Validation
 
-- **PUT** performs a **full replace** of the work item shape (explicit fields, including nullable `status` and `assigneeId`).
-- **POST** defaults **status** to **New** when omitted (`WorkItemStatusDefaults`); **priority** defaults to **Low** when omitted (`WorkItemPriorityDefaults`).
-- **Assignee** foreign key is validated in handlers: unknown id → **400** (`BadRequestException`), not **404**, because the primary resource is still the work item.
+FluentValidation is used for request validation.
 
-## Search and filters
+This keeps validation logic out of controllers and helps produce consistent error responses for:
+- required fields
+- invalid email formats
+- malformed requests
 
-- `q` matches **title only** (case-insensitive substring), per product decision.
-- Filters (`status`, `priority`, `assigneeId`, `createdFrom`, `createdTo`) are combined with **AND**. Items with `status: null` only appear when no `status` filter is applied.
+Referential validation such as checking whether an assignee exists happens in the application layer through repository interfaces.
+
+## Soft delete and audit
+
+Soft delete was added for both `TeamMember` and `WorkItem`.
+
+Implementation choices:
+- rows are marked with `DeletedAt` and `DeletedById`
+- EF Core global query filters hide soft-deleted records from normal queries
+- delete operations do not physically remove rows
+
+An append-only `AuditLogEntry` store was also added to capture create, update, and delete events with a JSON snapshot payload.
+
+Why include this:
+- it demonstrates traceability and mutation history
+- it fits naturally with task management systems
+- it shows how cross-cutting concerns can be added without bloating controllers
+
+Trade-off:
+- these features are beyond the minimum brief and add complexity
+- for a simpler submission, they could have been omitted
+
+## Authentication and authorization
+
+Authentication was not explicitly required by the brief, but a lightweight development token flow was added.
+
+In Development:
+- a token can be minted through `/api/dev/token`
+- the token identifies the acting team member and role
+
+This supports:
+- deriving `assignerId` from the authenticated user on create
+- populating audit fields such as `createdById`, `updatedById`, and `deletedById`
+- restricting delete operations to `Admin`
+
+Trade-off:
+- this improves traceability and realism
+- it also adds setup and documentation overhead for a take-home exercise
 
 ## Error handling
 
-A single **middleware** converts:
+A single middleware layer translates exceptions into consistent HTTP responses.
 
-- `NotFoundException` → **404** Problem Details  
-- `BadRequestException` → **400** Problem Details  
-- `ValidationException` → **400** with grouped `errors`  
-- anything else → **500** (logged)
+Current mappings:
+- not found errors → `404`
+- bad request errors → `400`
+- validation failures → `400` with grouped validation messages
+- unexpected errors → `500`
 
-**401 Unauthorized** (JWT bearer challenge) uses **`JwtBearer` `OnChallenge`** to return **`application/problem+json`** with a brief generic **`detail`**. **403 Forbidden** (authenticated user, failed authorization) is handled by **`ForbiddenProblemDetailsAuthorizationResultHandler`**, which returns the same shape with a short **`detail`** (no remediation hints in the body).
+For authentication and authorization:
+- `401` returns Problem Details for missing or invalid Bearer tokens
+- `403` returns Problem Details when the user is authenticated but not allowed to perform the action
+
+This keeps controllers thin and centralizes error formatting.
 
 ## EF Core InMemory
 
-Required by the assessment. Trade-offs:
+The brief required EF Core InMemory, so the solution uses `UseInMemoryDatabase`.
 
-- Data is **not** persisted across process restarts.
-- Some behaviors differ from a real relational provider (e.g. `ToLower()` in LINQ is acceptable here for the InMemory provider and simplicity).
+Benefits:
+- easy setup
+- no external dependencies
+- fast startup for review and testing
 
-## Duplicated enums (Application vs Domain)
+Trade-offs:
+- data is lost on restart
+- behavior does not fully match a relational database
+- some query behavior that works in-memory may need adjustment when moving to SQL Server or PostgreSQL
 
-Chosen to keep **Application** independent of **Domain** types. The cost is **duplication** and a **mapping** layer in Infrastructure. An alternative is a tiny **shared kernel** project for enums only, or referencing Domain from Application (common in textbook Clean Architecture). The current approach optimizes for “API + use cases do not depend on persistence shapes.”
+For this assignment, the simplicity and speed of setup outweigh those limitations.
 
-## What would come next in production
+## Duplicated enums between layers
 
-- Real database (SQL Server/Postgres) with migrations.
-- Authentication/authorization and tenant scoping.
-- Pagination for list endpoints and sorting options.
-- Richer domain rules (state transitions) if requirements grow.
+Application and Domain use separate enum types with matching values.
+
+Reason for this choice:
+- it keeps the Application layer independent from Domain persistence types
+- it avoids leaking entity-layer types into request/response contracts
+
+Trade-off:
+- it introduces duplication and mapping code
+
+A reasonable alternative would be:
+- sharing enums through a small shared kernel project, or
+- allowing Application to reference Domain directly
+
+For this exercise, I preferred stronger layer independence over minimizing duplication.
+
+## Testing
+
+Integration tests were added for the core assessment flows:
+- listing seeded work items
+- searching by `q`
+- filtering by `status`, `assigneeId`, and `priority`
+- creating, updating, and deleting tasks
+
+I chose integration tests rather than only unit tests because they give better confidence that routing, validation, handlers, persistence, and serialization work together correctly.
+
+Trade-off:
+- integration tests are slightly slower and require more setup
+- for this API, the broader coverage was worth it
+
+## What I would do next in production
+
+If this were being developed beyond a take-home exercise, the next steps would be:
+
+- move to a real relational database with migrations
+- add pagination and sorting for list endpoints
+- strengthen authentication and authorization
+- add structured logging and observability
+- introduce richer domain rules, such as controlled status transitions
+- expand test coverage around edge cases and security
+- add CI/CD and environment-specific configuration
+
+## Summary
+
+The implementation fully covers the assessment requirements using ASP.NET Core Web API with EF Core InMemory and seeded data.
+
+I chose a slightly more structured design than the minimum required in order to demonstrate:
+- separation of concerns
+- validation
+- testability
+- clear API behavior
+- reasonable extensibility
+
+Where that added complexity, I have called it out explicitly as a trade-off.

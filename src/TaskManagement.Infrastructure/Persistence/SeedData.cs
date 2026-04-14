@@ -87,7 +87,7 @@ internal static class SeedData
                 Status = WorkItemStatus.Todo,
                 Priority = WorkItemPriority.Medium,
                 AssigneeId = Member2Id,
-                AssignerId = null,
+                AssignerId = Member1Id,
                 CreatedAt = t1,
                 UpdatedAt = t1,
             },
@@ -99,7 +99,7 @@ internal static class SeedData
                 Status = null,
                 Priority = WorkItemPriority.Low,
                 AssigneeId = null,
-                AssignerId = null,
+                AssignerId = Member2Id,
                 CreatedAt = t2,
                 UpdatedAt = t2,
             });
